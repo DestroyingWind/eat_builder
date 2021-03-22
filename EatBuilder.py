@@ -6,9 +6,12 @@ from utils import *
 import numpy as np
 import os
 import time
-from PIL import Image, ImageDraw, ImageFont
+import soundfile
+import subprocess
+import traceback
 
 from message_processor import message_processor
+from config.Hpara import callback_url
 
 
 def get_shape(image):
@@ -21,17 +24,17 @@ class EatBuilder(object):
     oss_dir = "eat_video"
     temp_store_dir = 'result'
 
-    def __init__(self, process_num=0, test_flag=False):
-        self.p_num = process_num
+    def __init__(self, test_flag=False):
         self.test_flag = test_flag
         self.resolution = (608, 1080)
         self.fps = 30
+        self.id = 0
         self.subtitle_dict = {
             "alignment": 'center',
             "font": os.path.join('source', 'benmojinsong.ttf'),
             "size": 40,
             "position": (304, 730),
-            "color": (0, 0, 0),
+            "color": (255, 255, 255),
             "border_flag": False,
             "row_spacing": 10,
             "type": 'alllines'
@@ -46,11 +49,13 @@ class EatBuilder(object):
             "row_spacing": 15,
             "type": 'alllines'
         }
+        self.op = {}
+        self.source = {}
 
     def message_process(self, message):
-        success, items = message_processor(message, self.test_flag)
+        success, items = message_processor(message)
         if success:
-            self.callback_url, self.id, self.op, self.source = items
+            self.id, self.op, self.source = items
         return success
 
     def build_mute_video(self):
@@ -60,6 +65,7 @@ class EatBuilder(object):
         body = self.build_body()
         end = self.build_endding()
         mute_video = opening + body + end
+        self.total_length = mute_video.__len__()
         for eachframe in mute_video:
             eachframe = cv2.resize(eachframe, self.resolution)
             self.video.write(eachframe)
@@ -108,7 +114,7 @@ class EatBuilder(object):
         for i in range(self.source.__len__()):
             pic = get_img_from_url(self.source[i]['pic'])
             back = normalize_pic(pic, dsize=self.resolution)
-            back = cv2.blur(back, (5, 5))
+            back = cv2.blur(back, (80, 80))
             front = normalize_pic(pic, smallpicsize)
             front = cv2.copyMakeBorder(front, 0, 0, 0, 400, cv2.BORDER_DEFAULT)
             position = [0, pic_start_y - 342]
@@ -121,8 +127,8 @@ class EatBuilder(object):
                     position[0] -= speedsx[j - timelength // 2]
                 thisframe = add_one_element(thiframe, front, position)
                 keyframe.append(thisframe)
-            self.add_subtitle(keyframe, self.source[i]['text'], self.subtitle_dict,True)
-            self.add_subtitle(keyframe, self.source[i]['title'], self.title_dict,False)
+            self.add_subtitle(keyframe, self.source[i]['text'], self.subtitle_dict, True, True)
+            self.add_subtitle(keyframe, self.source[i]['title'], self.title_dict, False, False)
             body += keyframe
         return body
 
@@ -132,72 +138,71 @@ class EatBuilder(object):
         endding.append(np.zeros((1080, 608), dtype=np.uint8))
         return endding
 
-    def add_subtitle(self, frames: list, subtitle, subtitle_dict,fadein=True):
+    def add_bgm(self):
+        bgm, sr = soundfile.read('source/newbgm0.wav')
+        if bgm.shape.__len__ == 2:
+            bgm = np.sum(bgm, axis=1) / 2
+        soundframe = int(self.total_length / self.fps * sr)
+        specify_bgm = [bgm.copy() for _ in range(soundframe // bgm.shape[0])]
+        specify_bgm.append(bgm[:soundframe % bgm.shape[0]])
+        soundfile.write(self.change_to_temp_dir('bgm.wav'), np.concatenate(specify_bgm), sr)
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", self.change_to_temp_dir("eat_video.avi"), "-i", self.change_to_temp_dir("bgm.wav"),
+             self.change_to_temp_dir("final.mp4")], stdout=-1, stderr=-1)
+
+    def add_subtitle(self, frames: list, subtitle, subtitle_dict, fadein=True, bord=False):
         length = frames.__len__()
+        if not length<=2*self.fps:
+            length-=2*self.fps
         chars = subtitle.__len__()
         chars_per_frame = chars / length
         max_char_num = self.resolution[0] // subtitle_dict["size"] - 2
         subtitle = self.split_text(subtitle, max_char_num)
-        lines=subtitle.__len__()
-        new_subtitle='\n'.join(subtitle)
+        lines = subtitle.__len__()
+        new_subtitle = '\n'.join(subtitle)
         if fadein:
-            textpic=get_subtitle_pic(new_subtitle,subtitle_dict['font'],subtitle_dict['size'],subtitle_dict['color'],subtitle_dict['row_spacing'])
-            shape=get_shape(textpic)
-            line_height=shape[1]//lines
-            mask=np.zeros([shape[1],shape[0]])
-            horizon_speed=shape[0]/max([x.__len__() for x in subtitle])*chars_per_frame
-            count_list=[x.__len__() for x in subtitle]
-            for i in range(1,count_list.__len__()):
-                count_list[i]+=count_list[i-1]
-            count_list.insert(0,0)
-            count=0
-            for i in range(length):
-                char_num=chars_per_frame*i
-                if char_num>=count_list[count]:
-                    if count==count_list.__len__()-1:
-                        mask[:,:]=1
+            if bord:
+                textpic = get_subtitle_pic(new_subtitle, subtitle_dict['font'], subtitle_dict['size'], subtitle_dict['color'], subtitle_dict['row_spacing'], 5, (54, 46, 43))
+            else:
+                textpic = get_subtitle_pic(new_subtitle, subtitle_dict['font'], subtitle_dict['size'], subtitle_dict['color'], spacing=subtitle_dict['row_spacing'])
+            shape = get_shape(textpic)
+            line_height = shape[1] // lines
+            mask = np.zeros([shape[1], shape[0]])
+            horizon_speed = shape[0] / max([x.__len__() for x in subtitle]) * chars_per_frame
+            count_list = [x.__len__() for x in subtitle]
+            for i in range(1, count_list.__len__()):
+                count_list[i] += count_list[i - 1]
+            count_list.insert(0, 0)
+            count = 0
+            for i in range(frames.__len__()):
+                char_num = chars_per_frame * i
+                if char_num >= count_list[count]:
+                    if count == count_list.__len__() - 1:
+                        mask[:, :] = 1
                     else:
-                        count=min(count_list.__len__()-1,count+1)
-                        mask[:line_height*(count-1),:]=1
+                        count = min(count_list.__len__() - 1, count + 1)
+                        mask[:line_height * (count - 1), :] = 1
                 else:
-                    mask[line_height*(count-1):line_height*count,:int((char_num-count_list[count-1])/chars_per_frame*horizon_speed)]=1
-                if subtitle_dict['alignment']=='left':
-                    frames[i]=add_one_element(frames[i],mask_transparency(mask,textpic),subtitle_dict['position'])
-                elif subtitle_dict['alignment']=='center':
-                    frames[i]=add_one_element(frames[i],mask_transparency(mask,textpic),(subtitle_dict['position'][0]-textpic.shape[1]//2,subtitle_dict['position'][1]))
+                    mask[line_height * (count - 1):line_height * count, :int((char_num - count_list[count - 1]) / chars_per_frame * horizon_speed)] = 1
+                if subtitle_dict['alignment'] == 'left':
+                    frames[i] = add_one_element(frames[i], mask_transparency(mask, textpic), subtitle_dict['position'])
+                elif subtitle_dict['alignment'] == 'center':
+                    frames[i] = add_one_element(frames[i], mask_transparency(mask, textpic), (subtitle_dict['position'][0] - textpic.shape[1] // 2, subtitle_dict['position'][1]))
                 else:
-                    frames[i]=add_one_element(frames[i],mask_transparency(mask,textpic),(subtitle_dict['position'][0]-textpic.shape[1],subtitle_dict['position'][1]))
+                    frames[i] = add_one_element(frames[i], mask_transparency(mask, textpic), (subtitle_dict['position'][0] - textpic.shape[1], subtitle_dict['position'][1]))
         else:
-            textpic = get_subtitle_pic(new_subtitle, subtitle_dict['font'], subtitle_dict['size'], subtitle_dict['color'], subtitle_dict['row_spacing'])
-            for i in range(length):
-                if subtitle_dict['alignment']=='left':
-                    frames[i]=add_one_element(frames[i],textpic,subtitle_dict['position'])
-                elif subtitle_dict['alignment']=='center':
-                    frames[i]=add_one_element(frames[i],textpic,(subtitle_dict['position'][0]-textpic.shape[1]//2,subtitle_dict['position'][1]))
+            if bord:
+                textpic = get_subtitle_pic(new_subtitle, subtitle_dict['font'], subtitle_dict['size'], subtitle_dict['color'], subtitle_dict['row_spacing'], 5, (54, 46, 43))
+            else:
+                textpic = get_subtitle_pic(new_subtitle, subtitle_dict['font'], subtitle_dict['size'], subtitle_dict['color'], spacing=subtitle_dict['row_spacing'])
+            for i in range(frames.__len__()):
+                if subtitle_dict['alignment'] == 'left':
+                    frames[i] = add_one_element(frames[i], textpic, subtitle_dict['position'])
+                elif subtitle_dict['alignment'] == 'center':
+                    frames[i] = add_one_element(frames[i], textpic, (subtitle_dict['position'][0] - textpic.shape[1] // 2, subtitle_dict['position'][1]))
                 else:
-                    frames[i]=add_one_element(frames[i],textpic,(subtitle_dict['position'][0]-textpic.shape[1],subtitle_dict['position'][1]))
+                    frames[i] = add_one_element(frames[i], textpic, (subtitle_dict['position'][0] - textpic.shape[1], subtitle_dict['position'][1]))
         return frames
-
-    def write_text(self, parameter: dict, text_list, img):
-        image = img
-        assert parameter["alignment"] in ["left", "center"]
-        if not os.path.exists(parameter["font"]):
-            parameter["font"] = "STXINGKA.TTF"
-        text_list = '\n'.join(text_list)
-        textpic = get_subtitle_pic(text_list, parameter['font'], parameter['size'], parameter['color'], parameter['row_spacing'])
-        if parameter["alignment"] == "left":
-            image = add_one_element(image, textpic, (parameter["position"][0], parameter["position"][1]))
-        elif parameter["alignment"] == "center":
-            image = add_one_element(image, textpic, (parameter["position"][0] - get_shape(textpic)[0] // 2, parameter["position"][1]))
-        return image
-
-    def split_overfitted_text(self, this_string, length):
-        this_string_list = []
-        while this_string.__len__() > length:
-            this_string_list.append(this_string[:length])
-            this_string = this_string[length:]
-        this_string_list.append(this_string)
-        return this_string_list
 
     def split_text(self, text, max_char_num):
         if self.subtitle_dict["type"] == "alllines":
@@ -226,11 +231,8 @@ class EatBuilder(object):
         time_dir = "%04d%02d%02d" % (now.tm_year, now.tm_mon, now.tm_mday)
         dir_file = time_dir + "/" + final_filename
         try:
-            post_to_oss(self.change_to_temp_dir("final_{}.mp4".format(self.p_num)), dir_file, direc=self.oss_dir)
-            if self.notice_flag:
-                requests.get(self.callback_url.split("?")[0] + "?id={}&videoUrl={}".format(self.id,
-                                                                                           "https://video-ydianzx.oss-cn-beijing.aliyuncs.com/" + self.oss_dir + '/' + dir_file))
-                self.notice_flag = False
+            post_to_oss(self.change_to_temp_dir("final.mp4"), dir_file, direc=self.oss_dir)
+            requests.get(callback_url.split("?")[0] + "?id={}&videoUrl={}".format(self.id, "https://video-ydianzx.oss-cn-beijing.aliyuncs.com/" + self.oss_dir + '/' + dir_file))
         except:
             print("upload failed!")
             raise AssertionError
@@ -247,22 +249,21 @@ class EatBuilder(object):
         if self.test_flag:
             self.build_mute_video()
             print("mute video built")
-            # self.merge_a_v()
+            self.add_bgm()
             print("successfully built the video finished!!!")
         else:
-            self.notice_flag = False
-            print("process {}'s voices is ready!".format(self.p_num))
+            print("voices is ready!")
             try:
-                print("{} building ".format(self.p_num), 'eat', " start")
-                # self.get_voice_ready()
-                # print("voices is ready!")
+                print("building ", 'eat', " start")
                 self.build_mute_video()
-                print("{} mute video built".format(self.p_num))
-                print("{} successfully built the video finished!!!".format(self.p_num))
+                print("mute video built")
+                self.add_bgm()
+                print("successfully built the video finished!!!")
                 self.uploads()
-                print("{} video uploaded!".format(self.p_num))
-            except Exception as e:
-                print("{} ERROR HAPPENDED!!!!!!\nThe error is:\n".format(self.p_num), e)
+                print("video uploaded!")
+            except Exception:
+                print("ERROR HAPPENDED!!!!!!\n")
+                traceback.print_exc()
                 requests.get(
                     "http://manager.media.yidianzx.com/api/article/getMessage.do?id={}&message=err".format(
                         self.id))
@@ -270,10 +271,10 @@ class EatBuilder(object):
 
 
 if __name__ == "__main__":
-    a = EatBuilder(test_flag=True)
+    a = EatBuilder(test_flag=False)
     # a.message_process(
     #     message='{"articleId": 1275, "cover": "http://api.photochina.china.cn/oss/media/images/20201109/15/img_019c7d8459a998f1993361560cf5429a-640_360.jpg", "lastModify": 1604906747548, "scenes": [{"items": [{"action": "-", "source": "http://api.photochina.china.cn/oss/media/images/20201109/15/img_019c7d8459a998f1993361560cf5429a-640_9999.jpg", "type": "IMAGE"}, {"action": "-", "source": "http://api.photochina.china.cn/oss/media/images/20201109/15/img_de786c35004f6dfbb2d2c8ed7f3a94b8-640_9999.jpg", "type": "IMAGE"}, {"action": "-", "source": "http://api.photochina.china.cn/oss/media/images/20201109/15/img_bb91efb292ce8c6902afb7cdfb5ee6a9-640_9999.jpg", "type": "IMAGE"}, {"action": "-", "source": "http://api.photochina.china.cn/oss/media/images/20201109/15/img_a9eb51a36f23c16ae766236c1bcaf951-640_9999.jpg", "type": "IMAGE"}], "text": "都说美女的朋友都是美女，杨颖与她的这5名闺蜜，都长得非常漂亮。只是，她们的妆容太接近，加上长相也相似，反正就是相似度太高了。让网友忍不住留言，差点找不到baby在哪里。"}], "summary": "某微电影导演在个人社交账号上晒出一组聚会照，并配文称，谢谢大家对天蝎的爱。照片的背景上放了很多气球的装饰物，桌子上还放着一个精致的蛋糕。很显...", "title": "曝！杨颖与闺蜜聚会_妆容接近长相相似", "voice": "none"}'
     # )
     a.message_process(
-        message='{"title":"测试测试测_这是一个测试,让我们快乐的测试","cover":"https://ss0.bdstatic.com/70cFuHSh_Q1YnxGkpoWK1HF6hhy/it/u=1819216937,2118754409&fm=26&gp=0.jpg","source":[{"pic":"https://ss1.bdstatic.com/70cFvXSh_Q1YnxGkpoWK1HF6hhy/it/u=3363295869,2467511306&fm=26&gp=0.jpg","text":"test1_test","title":"title1_test"},{"pic":"https://ss0.bdstatic.com/70cFuHSh_Q1YnxGkpoWK1HF6hhy/it/u=1963304009,2816364381&fm=26&gp=0.jpg","text":"test2_test","title":"title2_test"}],"text":"test0_test"}', )
+        message='{"articleId":0,"title":"测试测试测_这是一个测试,让我们快乐的测试","cover":"https://ss0.bdstatic.com/70cFuHSh_Q1YnxGkpoWK1HF6hhy/it/u=1819216937,2118754409&fm=26&gp=0.jpg","source":[{"pic":"https://ss1.bdstatic.com/70cFvXSh_Q1YnxGkpoWK1HF6hhy/it/u=3363295869,2467511306&fm=26&gp=0.jpg","text":"test1_test","title":"title1_test"},{"pic":"https://ss0.bdstatic.com/70cFuHSh_Q1YnxGkpoWK1HF6hhy/it/u=1963304009,2816364381&fm=26&gp=0.jpg","text":"test2_test","title":"title2_test"}],"text":"test0_test"}', )
     a.gen_video()

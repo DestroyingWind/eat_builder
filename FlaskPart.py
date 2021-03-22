@@ -13,7 +13,7 @@ app = Flask(__name__)
 @app.route("/eat")
 def horizontal_build():
     try:
-        videoid = request.args.get('videoId')
+        videoid = request.args.get('id')
         queue.put_nowait(videoid)
         requests.get(statue_url.format(videoid,statue['doing']))
         return 'OK'
@@ -35,6 +35,7 @@ def real_build():
             videoid = queue.get()
             try:
                 inner_message = requests.get(inner_url.format(videoid)).content.decode('utf-8')
+                print(inner_message)
                 video_builder.message_process(inner_message)
                 video_builder.gen_video()
             except Exception as e:
