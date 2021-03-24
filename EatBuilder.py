@@ -29,25 +29,27 @@ class EatBuilder(object):
         self.resolution = (608, 1080)
         self.fps = 30
         self.id = 0
-        self.subtitle_dict = {
-            "alignment": 'center',
-            "font": os.path.join('source', 'benmojinsong.ttf'),
-            "size": 40,
-            "position": (304, 730),
-            "color": (255, 255, 255),
-            "border_flag": False,
-            "row_spacing": 10,
-            "type": 'alllines'
-        }
         self.title_dict = {
+            'fadein':False,
             "alignment": 'center',
             "font": os.path.join('source', 'benmojinsong.ttf'),
             "size": 60,
             "position": (304, 130),
-            "color": (0, 0, 0),
-            "border_flag": False,
+            "color": (255, 255, 255),
+            "border_flag": True,
             "row_spacing": 15,
-            "type": 'alllines'
+            "type": "alllines",
+        }
+        self.subtitle_dict = {
+            'fadein':True,
+            "alignment": 'left',
+            "font": os.path.join('source', 'benmojinsong.ttf'),
+            "size": 40,
+            "position": (304, 730),
+            "color": (255, 255, 255),
+            "border_flag": True,
+            "row_spacing": 10,
+            "type": "alllines",
         }
         self.op = {}
         self.source = {}
@@ -93,7 +95,6 @@ class EatBuilder(object):
 
     def build_body(self):
         timelength = 150
-        picwindow = [(0, 369), (608, 711)]
         smallpicsize = (608, 342)
         frames = int(timelength // 2)
         # gen_speeds
@@ -127,8 +128,8 @@ class EatBuilder(object):
                     position[0] -= speedsx[j - timelength // 2]
                 thisframe = add_one_element(thiframe, front, position)
                 keyframe.append(thisframe)
-            self.add_subtitle(keyframe, self.source[i]['text'], self.subtitle_dict, True, True)
-            self.add_subtitle(keyframe, self.source[i]['title'], self.title_dict, False, False)
+            self.add_subtitle(keyframe, self.source[i]['text'], self.subtitle_dict)
+            self.add_subtitle(keyframe, self.source[i]['title'], self.title_dict)
             body += keyframe
         return body
 
@@ -150,7 +151,7 @@ class EatBuilder(object):
             ["ffmpeg", "-y", "-i", self.change_to_temp_dir("eat_video.avi"), "-i", self.change_to_temp_dir("bgm.wav"),
              self.change_to_temp_dir("final.mp4")], stdout=-1, stderr=-1)
 
-    def add_subtitle(self, frames: list, subtitle, subtitle_dict, fadein=True, bord=False):
+    def add_subtitle(self, frames: list, subtitle, subtitle_dict):
         length = frames.__len__()
         if not length<=2*self.fps:
             length-=2*self.fps
@@ -160,11 +161,11 @@ class EatBuilder(object):
         subtitle = self.split_text(subtitle, max_char_num)
         lines = subtitle.__len__()
         new_subtitle = '\n'.join(subtitle)
-        if fadein:
-            if bord:
-                textpic = get_subtitle_pic(new_subtitle, subtitle_dict['font'], subtitle_dict['size'], subtitle_dict['color'], subtitle_dict['row_spacing'], 5, (54, 46, 43))
+        if subtitle_dict['fadein']:
+            if subtitle_dict['border_flag']:
+                textpic = get_subtitle_pic(new_subtitle, subtitle_dict['font'], subtitle_dict['size'], subtitle_dict['color'], subtitle_dict['row_spacing'], 5, (54, 46, 43),align=subtitle_dict['alignment'])
             else:
-                textpic = get_subtitle_pic(new_subtitle, subtitle_dict['font'], subtitle_dict['size'], subtitle_dict['color'], spacing=subtitle_dict['row_spacing'])
+                textpic = get_subtitle_pic(new_subtitle, subtitle_dict['font'], subtitle_dict['size'], subtitle_dict['color'], spacing=subtitle_dict['row_spacing'],align=subtitle_dict['alignment'])
             shape = get_shape(textpic)
             line_height = shape[1] // lines
             mask = np.zeros([shape[1], shape[0]])
@@ -185,23 +186,23 @@ class EatBuilder(object):
                 else:
                     mask[line_height * (count - 1):line_height * count, :int((char_num - count_list[count - 1]) / chars_per_frame * horizon_speed)] = 1
                 if subtitle_dict['alignment'] == 'left':
-                    frames[i] = add_one_element(frames[i], mask_transparency(mask, textpic), subtitle_dict['position'])
+                    frames[i] = add_one_element(frames[i], mask_transparency(mask, textpic), (subtitle_dict['position'][0] - textpic.shape[1] // 2, subtitle_dict['position'][1]))
                 elif subtitle_dict['alignment'] == 'center':
                     frames[i] = add_one_element(frames[i], mask_transparency(mask, textpic), (subtitle_dict['position'][0] - textpic.shape[1] // 2, subtitle_dict['position'][1]))
                 else:
-                    frames[i] = add_one_element(frames[i], mask_transparency(mask, textpic), (subtitle_dict['position'][0] - textpic.shape[1], subtitle_dict['position'][1]))
+                    frames[i] = add_one_element(frames[i], mask_transparency(mask, textpic), (subtitle_dict['position'][0] - textpic.shape[1]//2, subtitle_dict['position'][1]))
         else:
-            if bord:
-                textpic = get_subtitle_pic(new_subtitle, subtitle_dict['font'], subtitle_dict['size'], subtitle_dict['color'], subtitle_dict['row_spacing'], 5, (54, 46, 43))
+            if subtitle_dict['border_flag']:
+                textpic = get_subtitle_pic(new_subtitle, subtitle_dict['font'], subtitle_dict['size'], subtitle_dict['color'], subtitle_dict['row_spacing'], 5, (54, 46, 43),align=subtitle_dict['alignment'])
             else:
-                textpic = get_subtitle_pic(new_subtitle, subtitle_dict['font'], subtitle_dict['size'], subtitle_dict['color'], spacing=subtitle_dict['row_spacing'])
+                textpic = get_subtitle_pic(new_subtitle, subtitle_dict['font'], subtitle_dict['size'], subtitle_dict['color'], spacing=subtitle_dict['row_spacing'],align=subtitle_dict['alignment'])
             for i in range(frames.__len__()):
                 if subtitle_dict['alignment'] == 'left':
-                    frames[i] = add_one_element(frames[i], textpic, subtitle_dict['position'])
+                    frames[i] = add_one_element(frames[i], textpic, (subtitle_dict['position'][0] - textpic.shape[1] // 2, subtitle_dict['position'][1]))
                 elif subtitle_dict['alignment'] == 'center':
                     frames[i] = add_one_element(frames[i], textpic, (subtitle_dict['position'][0] - textpic.shape[1] // 2, subtitle_dict['position'][1]))
                 else:
-                    frames[i] = add_one_element(frames[i], textpic, (subtitle_dict['position'][0] - textpic.shape[1], subtitle_dict['position'][1]))
+                    frames[i] = add_one_element(frames[i], textpic, (subtitle_dict['position'][0] - textpic.shape[1]//2, subtitle_dict['position'][1]))
         return frames
 
     def split_text(self, text, max_char_num):
