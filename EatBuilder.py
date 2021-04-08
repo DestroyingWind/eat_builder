@@ -8,10 +8,11 @@ import os
 import time
 import soundfile
 import subprocess
+import random
 import traceback
 
 from message_processor import message_processor
-from config.Hpara import callback_url
+import config.Hpara as hp
 
 
 def get_shape(image):
@@ -29,28 +30,7 @@ class EatBuilder(object):
         self.resolution = (608, 1080)
         self.fps = 30
         self.id = 0
-        self.title_dict = {
-            'fadein':False,
-            "alignment": 'center',
-            "font": os.path.join('source', 'benmojinsong.ttf'),
-            "size": 60,
-            "position": (304, 130),
-            "color": (255, 255, 255),
-            "border_flag": True,
-            "row_spacing": 15,
-            "type": "alllines",
-        }
-        self.subtitle_dict = {
-            'fadein':True,
-            "alignment": 'left',
-            "font": os.path.join('source', 'benmojinsong.ttf'),
-            "size": 40,
-            "position": (304, 730),
-            "color": (255, 255, 255),
-            "border_flag": True,
-            "row_spacing": 10,
-            "type": "alllines",
-        }
+
         self.op = {}
         self.source = {}
 
@@ -89,8 +69,8 @@ class EatBuilder(object):
                 thisframe = thisframe[int(resy * i):int(resy * i + shape[0] / 9 * 16), :, :]
             thisframe = normalize_pic(thisframe, self.resolution)
             opening.append(thisframe)
-        self.add_subtitle(opening, self.op['text'], self.subtitle_dict)
-        self.add_subtitle(opening, self.op['title'], self.title_dict)
+        # self.add_subtitle(opening, self.op['text'], self.subtitle_dict)
+        self.add_subtitle(opening, self.op['title'], hp.cover_title_dict)
         return opening
 
     def build_body(self):
@@ -128,8 +108,8 @@ class EatBuilder(object):
                     position[0] -= speedsx[j - timelength // 2]
                 thisframe = add_one_element(thiframe, front, position)
                 keyframe.append(thisframe)
-            self.add_subtitle(keyframe, self.source[i]['text'], self.subtitle_dict)
-            self.add_subtitle(keyframe, self.source[i]['title'], self.title_dict)
+            self.add_subtitle(keyframe, self.source[i]['text'], hp.subtitle_dict)
+            self.add_subtitle(keyframe, self.source[i]['title'], hp.title_dict)
             body += keyframe
         return body
 
@@ -140,7 +120,8 @@ class EatBuilder(object):
         return endding
 
     def add_bgm(self):
-        bgm, sr = soundfile.read('source/newbgm0.wav')
+        bgmfile = random.choice(['newbgm0.wav','newbgm1.wav'])
+        bgm, sr = soundfile.read(os.path.join('source',bgmfile))
         if bgm.shape.__len__ == 2:
             bgm = np.sum(bgm, axis=1) / 2
         soundframe = int(self.total_length / self.fps * sr)
@@ -152,9 +133,11 @@ class EatBuilder(object):
              self.change_to_temp_dir("final.mp4")], stdout=-1, stderr=-1)
 
     def add_subtitle(self, frames: list, subtitle, subtitle_dict):
+        if subtitle=='':
+            subtitle=' '
         length = frames.__len__()
-        if not length<=2*self.fps:
-            length-=2*self.fps
+        if not length<=4*self.fps:
+            length-=4*self.fps
         chars = subtitle.__len__()
         chars_per_frame = chars / length
         max_char_num = self.resolution[0] // subtitle_dict["size"] - 2
@@ -206,7 +189,7 @@ class EatBuilder(object):
         return frames
 
     def split_text(self, text, max_char_num):
-        if self.subtitle_dict["type"] == "alllines":
+        if hp.subtitle_dict["type"] == "alllines":
             text_list = [""]
             for i, char in enumerate(text):
                 if char == '_':
@@ -233,7 +216,7 @@ class EatBuilder(object):
         dir_file = time_dir + "/" + final_filename
         try:
             post_to_oss(self.change_to_temp_dir("final.mp4"), dir_file, direc=self.oss_dir)
-            requests.get(callback_url.split("?")[0] + "?id={}&videoUrl={}".format(self.id, "https://video-ydianzx.oss-cn-beijing.aliyuncs.com/" + self.oss_dir + '/' + dir_file))
+            requests.get(hp.callback_url.split("?")[0] + "?id={}&videoUrl={}".format(self.id, "https://video-ydianzx.oss-cn-beijing.aliyuncs.com/" + self.oss_dir + '/' + dir_file))
         except:
             print("upload failed!")
             raise AssertionError
